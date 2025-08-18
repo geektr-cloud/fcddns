@@ -1,0 +1,24 @@
+name: release aliyun fc
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-zip:
+    name: Build Zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wangyoucao577/go-release-action@v1
+        env:
+          CGO_ENABLED: 0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: linux
+          goarch: amd64
+          project_path: "./runtimes/aliyun_fc"
+          binary_name: "main"
+          extra_files: LICENSE README.md
+          compress_assets: zip
+          asset_name: "fc-aliyun-fc-${{ github.ref_name }}.zip"
