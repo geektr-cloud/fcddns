@@ -4,8 +4,12 @@ import { jwtVerify } from 'jose';
 interface JwtPayload {
 	host: string;
 	domain: string;
+	slot?: number;
 	ip?: string;
 }
+
+const slotMarkPattern = /\[fcddns-slot:\d+\]/;
+const slotMarkF = (d: number) => `[fcddns-slot:${d}]`;
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
@@ -39,9 +43,11 @@ export default {
 			return new Response('Invalid JWT', { status: 400 });
 		}
 
-		const { host, domain } = decoded;
+		const { host, domain, slot = 0 } = decoded;
+		const slotMark = slotMarkF(slot);
 
 		ip = ip || decoded.ip || (request.headers.get('cf-connecting-ip') as string);
+		const deleteRecord = ip === '0.0.0.0';
 
 		const cf = new Cloudflare({ apiToken: env.CLOUDFLARE_API_TOKEN });
 		const fqdn = `${host}.${domain}`;
@@ -56,12 +62,19 @@ export default {
 			const recordsResponse = await cf.dns.records.list({ zone_id: zoneId, type: 'A', name: { exact: fqdn } });
 			const records = recordsResponse.result;
 
-			if (records.length > 1) {
-				return new Response(`Multiple A records found for ${fqdn}, please manage them manually.`, {
-					status: 400,
-				});
+			const nonManagedRecords = records.filter((record) => !slotMarkPattern.test(record.comment ?? ''));
+			if (nonManagedRecords.length > 0) {
+				return new Response(
+					`There is ${nonManagedRecords.length} record(s) not managed by fcddns for ${fqdn}, please manage them manually.`,
+					{ status: 400 }
+				);
 			}
-			if (records.length === 0) {
+
+			const record = records.find((record) => record.comment?.includes(slotMark));
+
+			if (record === undefined) {
+				if (deleteRecord) return new Response(`Record for ${fqdn} in slot ${slot} not found, so delete record is skipped`, { status: 200 });
+
 				await cf.dns.records.create({
 					zone_id: zoneId,
 					type: 'A',
@@ -69,14 +82,18 @@ export default {
 					content: ip,
 					ttl: 1,
 					proxied: false,
+					comment: slotMark,
 				});
-				return new Response(`Successfully created A record for ${fqdn} with IP ${ip}`, { status: 201 });
+				return new Response(`Successfully created A record for ${fqdn} with IP ${ip} in slot ${slot}`, { status: 201 });
 			}
-
-			const record = records[0];
 
 			if (record.content === ip) {
 				return new Response(`IP for ${fqdn} is already up to date.`, { status: 200 });
+			}
+
+			if (deleteRecord) {
+				await cf.dns.records.delete(record.id, { zone_id: zoneId });
+				return new Response(`Successfully deleted A record for ${fqdn} in slot ${slot}`, { status: 200 });
 			}
 
 			await cf.dns.records.update(record.id, {
@@ -86,8 +103,9 @@ export default {
 				content: ip,
 				ttl: record.ttl,
 				proxied: record.proxied,
+				comment: slotMark,
 			});
-			return new Response(`Successfully updated IP for ${fqdn} to ${ip}`, { status: 200 });
+			return new Response(`Successfully updated IP for ${fqdn} to ${ip} in slot ${slot}`, { status: 200 });
 		} catch (error) {
 			console.error('DDNS update failed:', error);
 			return new Response('An unexpected error occurred.', { status: 500 });

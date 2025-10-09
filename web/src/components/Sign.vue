@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { reactive, ref, computed, watch } from 'vue'
-import { NButton, NCard, NSpace, NAlert, NInput, NInputGroup, NSelect, NIcon } from 'naive-ui'
+import { NButton, NCard, NSpace, NAlert, NInput, NInputGroup, NSelect, NIcon, NInputNumber, NDivider } from 'naive-ui'
 import { Eye, EyeOff } from '@vicons/ionicons5'
 import type { Rules } from 'async-validator'
 import { useAsyncValidator } from '@vueuse/integrations/useAsyncValidator'
-import { useClipboard, useDebounceFn } from '@vueuse/core'
-
+import { useDebounceFn, useFetch } from '@vueuse/core'
 import { SignJWT } from 'jose';
+
+import { CopyButton, ExcuteButton } from './MyButtons';
 
 const domainOptions = ["geektr.co", "geektr.cloud"].map(i => ({ label: i, value: i }))
 
@@ -14,6 +15,7 @@ const form = reactive({
   jwtSecret: '',
   host: '',
   domain: 'geektr.cloud',
+  slot: undefined,
 })
 
 const rules: Rules = {
@@ -24,6 +26,9 @@ const rules: Rules = {
   host: {
     type: 'string',
     required: true,
+  },
+  slot: {
+    type: 'number',
   },
 }
 
@@ -46,16 +51,17 @@ watch(form, useDebounceFn(async () => {
   }
 
   const secret = new TextEncoder().encode(form.jwtSecret)
-  token.value = await new SignJWT({ host: form.host, domain: form.domain })
+  const payload: any = { host: form.host, domain: form.domain }
+
+  if (form.slot != undefined) payload.slot = form.slot
+
+  token.value = await new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .sign(secret)
 }, 300))
 
-const { copy: copyToken, copied: tokenCopied } = useClipboard({ source: token })
-
 const url = computed(() => `${location.protocol}//${location.host}/ddns/v1/${token.value}`)
-const { copy: urlCopy, copied: urlCopied } = useClipboard({ source: url })
-
+const rosCommand = computed(() => `:log info ([/tool fetch mode=https url="${url.value}" output=user as-value]->"data");`)
 
 import { useRosScript } from './config-helpers';
 const showRosScript = useRosScript();
@@ -83,6 +89,10 @@ const helpers = [
       <p v-if="errorFields?.host?.length" class="text-red-300">
         Error: {{ errorFields?.host[0]?.message }}
       </p>
+      <n-input-number placeholder="Slot" v-model:value="form.slot" />
+      <p v-if="errorFields?.slot?.length" class="text-red-300">
+        Error: {{ errorFields?.slot[0]?.message }}
+      </p>
     </n-space>
     <template #footer>
       <n-space vertical v-if="token">
@@ -101,17 +111,21 @@ const helpers = [
       </n-space>
     </template>
     <template #action>
-      <n-space v-show="token">
-        <n-button tiny secondary size="small" type="info" @click="copyToken()">
-          {{ tokenCopied ? 'copied!' : 'Copy' }}
-        </n-button>
-        <n-button tiny secondary size="small" type="info" @click="urlCopy()">
-          {{ urlCopied ? 'copied!' : 'Copy DDNS URL' }}
-        </n-button>
-        <n-button tiny secondary size="small" type="info" v-for="helper in helpers" @click="helper.action()">
-          {{ helper.name }}
-        </n-button>
-      </n-space>
+      <div v-show="token">
+        <n-space>
+          <CopyButton tiny secondary size="small" type="info" label="Copy Token" :content="token" />
+          <CopyButton tiny secondary size="small" type="info" label="Copy URL" :content="url" />
+          <CopyButton tiny secondary size="small" type="info" label="Copy RouterOS Command" :content='rosCommand' />
+          <n-button tiny secondary size="small" type="info" v-for="helper in helpers" @click="helper.action()">
+            {{ helper.name }}
+          </n-button>
+        </n-space>
+        <n-divider />
+        <n-space>
+          <ExcuteButton tiny secondary size="small" type="primary" :exec="() => useFetch(url, { immediate: false })"
+            label="Update DNS Record with Current IP" loaddingLabel="Updating..." />
+        </n-space>
+      </div>
     </template>
   </n-card>
 </template>
